@@ -15,6 +15,13 @@
       </div>
     </header>
 
+    <div v-if="meta.key === 'data_reconcile'" class="rw-mount">
+      <ReconcileWorkspace />
+    </div>
+    <div v-else-if="meta.key === 'changelog'" class="cw-mount">
+      <ChangelogWorkspace />
+    </div>
+
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
@@ -103,6 +110,8 @@ import {
   moduleMeta,
   runAction as applyAction,
 } from '@/api/backend-service'
+import ChangelogWorkspace from '@/components/ChangelogWorkspace.vue'
+import ReconcileWorkspace from '@/components/ReconcileWorkspace.vue'
 import type { EntryRow } from '@/data/types'
 
 const props = defineProps<{ moduleKey: string }>()
@@ -170,6 +179,9 @@ async function runAction(action: string, row: EntryRow) {
   try {
     const result = await applyAction(meta.key, Number(row.id), action)
     if (!result.ok) throw new Error(result.message)
+    window.dispatchEvent(new CustomEvent('module-action', {
+      detail: { moduleKey: meta.key, id: Number(row.id), action, result },
+    }))
     await reload()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '操作失败'

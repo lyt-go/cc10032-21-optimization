@@ -77,5 +77,33 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 对账明细、稳定分页与日志说明
+
+对账域在通用任务清单之外，新增了按「对账运行」固化的明细检索与日志说明流转
+（核心逻辑在 `backend/app/services/reconcile_flow.py`，扩展路由在
+`backend/app/routers/reconcile_extra.py`）：
+
+- 每次「发起对账」（允许重跑）生成一个运行编号 `run_no`，并保存不可变明细：
+  明细编号 `detail_no`、差异类型（金额差异 / 状态差异 / 仅左侧存在 / 仅右侧存在）、
+  业务键、左侧值、右侧值。
+- `GET /api/reconcile/details?run_no=...&page=1&size=10&diff_type=金额差异`
+  返回 `{ items,total,page,size,total_pages,page_token,filter_counts }`。
+  首次查询签发 `page_token`；携带同一 token 翻页时按冻结的 id 序列返回，
+  新一轮对账写入不会改变已签发分页的总数与内容。指定 `task_id` 取最新运行；
+  没有运行记录的历史任务回退读取任务行上的历史「对账结论」。
+- 每次运行向变更日志清单回写一条 `记录类别=对账运行汇总` 的记录（含运行编号）；
+  `GET /api/changelog/trace?run_no=...` 或
+  `GET /api/changelog?运行编号=...` 可经运行编号反查原明细。
+- `POST /api/reconcile/details/{id}/note` 打开/沿用「待发送」日志说明；
+  `POST /api/reconcile/notes/{noteId}/submit` 提交。若最新对账已把该业务键判为一致，
+  接口返回 `ok:false, code=stale_decision_required`，必须带
+  `decision=继续引用旧差异` 或 `decision=因更正撤回` 再提交：
+  前者把含旧运行/明细编号与左右侧旧值的说明写入变更日志，后者写「更正撤回」记录。
+  提交响应附带 `decision_counts`（两个筛选条数）与 `next_send_range`（下一次可发范围）。
+- `POST /api/reconcile/setup-acceptance` 一键构造 23 条（12 金额 + 11 状态）差异的
+  验收数据并完成首次对账；`POST /api/reconcile/correct` 纠正某业务键并重跑。
+  前端「数据对账」页顶部工作台提供等价按钮、稳定分页器与说明弹窗，
+  「变更日志」页提供两个处置筛选条数与按编号追溯。
+
 领域：数据工程
 子方向：数仓与数据湖

@@ -13,12 +13,33 @@ from app.services import service_for
 
 router = APIRouter(prefix="/api", tags=["业务资源"])
 
+# 分页/检索保留参数，不作为字段筛选下发
+_RESERVED_QUERY_KEYS = {"page", "size", "keyword", "status"}
+
 
 def require_service(module: str):
     service = service_for(module)
     if service is None:
         raise HTTPException(status_code=404, detail=f"未知业务模块：{module}")
     return service
+
+
+def _build_filters(request: Request, service: Any) -> dict[str, str]:
+    """收集字段筛选。
+
+    既有口径：仅 LIST_FIELDS 中的中文字段生效；同时把其余非保留参数原样传给
+    服务层，允许子服务识别 run_no / decision 等检索别名（基类会忽略未知键）。
+    """
+    filters: dict[str, str] = {}
+    for key, value in request.query_params.items():
+        text = value.strip() if isinstance(value, str) else ""
+        if not text or key in _RESERVED_QUERY_KEYS:
+            continue
+        if key in service.LIST_FIELDS:
+            filters[key] = text
+        else:
+            filters[key] = text
+    return filters
 
 
 @router.get("/{module}", response_model=PageResult[dict])
@@ -31,11 +52,7 @@ def list_entries(
     size: int = Query(default=20, ge=1, le=200),
 ) -> PageResult[dict]:
     service = require_service(module)
-    filters = {
-        key: value.strip()
-        for key, value in request.query_params.items()
-        if key in service.LIST_FIELDS and value.strip()
-    }
+    filters = _build_filters(request, service)
     items, total = service.list_entries(
         filters=filters, keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
@@ -49,11 +66,7 @@ def export_entries(
     status: str | None = Query(default=None),
 ) -> StreamingResponse:
     service = require_service(module)
-    filters = {
-        key: value.strip()
-        for key, value in request.query_params.items()
-        if key in service.LIST_FIELDS and value.strip()
-    }
+    filters = _build_filters(request, service)
     items, _ = service.list_entries(
         filters=filters, keyword=keyword, status=status, page=1, size=1_000_000)
     output = io.StringIO()
@@ -94,5 +107,6 @@ def create_entry(module: str, payload: EntryPayload) -> ActionResult:
 @router.post("/{module}/{entry_id}/actions", response_model=ActionResult)
 def run_action(module: str, entry_id: int, payload: ActionPayload) -> ActionResult:
     service = require_service(module)
-    entry, message = service.run_action(entry_id, payload.action.strip())
+    entry, message = service.run_action(
+        entry_id, payload.action.strip(), context={"remark": payload.remark})
     return ActionResult(ok=entry is not None, message=message, entry=entry)

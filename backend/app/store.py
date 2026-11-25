@@ -133,6 +133,20 @@ class Store:
         self._lineage_graph: dict[str, list[dict[str, Any]]] = {}
         # 归档清单（cold_archive → retention 共享）
         self._archive_manifest: list[dict[str, Any]] = []
+        # 对账运行 / 对账明细（按运行固化，支持稳定分页）
+        self.reconcile_runs: list[dict[str, Any]] = []
+        self._reconcile_runs = self.reconcile_runs
+        self.reconcile_details: list[dict[str, Any]] = []
+        self._reconcile_details = self.reconcile_details
+        # 值班员的日志说明（待发送草稿 / 已发送 / 已撤回）
+        self.log_notes: list[dict[str, Any]] = []
+        self._log_notes = self.log_notes
+        # 已签发的分页快照：page_token -> 固化的明细 id 序列
+        self.reconcile_page_tokens: dict[str, dict[str, Any]] = {}
+        self._reconcile_page_tokens = self.reconcile_page_tokens
+        # 兼容可能的检索命名
+        self._reconcile_reports = self.reconcile_runs
+        self._reconcile_diff_details = self.reconcile_details
 
     # ---------- 基础 CRUD ----------
     def module_names(self) -> list[str]:
@@ -239,6 +253,77 @@ class Store:
 
     def archive_manifest_for_table(self, table_name: str) -> list[dict[str, Any]]:
         return [r for r in self._archive_manifest if r.get("源表名称") == table_name]
+
+    # ---------- 对账运行 / 明细 ----------
+    def save_reconcile_run(self, run: dict[str, Any]) -> dict[str, Any]:
+        self.reconcile_runs.append(run)
+        return run
+
+    def save_reconcile_details(self, details: list[dict[str, Any]]) -> None:
+        self.reconcile_details.extend(details)
+
+    def find_reconcile_run(self, ref: Any) -> dict[str, Any] | None:
+        """按运行 id 或运行编号（兼容中文键）查找对账运行。"""
+        if ref is None:
+            return None
+        ref_str = str(ref).strip()
+        for run in reversed(self.reconcile_runs):
+            if str(run.get("run_no", "")) == ref_str or str(run.get("运行编号", "")) == ref_str:
+                return run
+        if ref_str.isdigit():
+            for run in reversed(self.reconcile_runs):
+                if int(run.get("id", -1)) == int(ref_str) or int(run.get("run_id", -1)) == int(ref_str):
+                    return run
+        return None
+
+    def latest_reconcile_run(
+        self, task_id: Any = None, left_table: str | None = None,
+        right_table: str | None = None,
+    ) -> dict[str, Any] | None:
+        candidates = list(self.reconcile_runs)
+        if task_id is not None:
+            candidates = [r for r in candidates if str(r.get("task_id")) == str(task_id)]
+        if left_table is not None:
+            candidates = [r for r in candidates if r.get("left_table") == left_table]
+        if right_table is not None:
+            candidates = [r for r in candidates if r.get("right_table") == right_table]
+        return candidates[-1] if candidates else None
+
+    def find_reconcile_detail(self, ref: Any) -> dict[str, Any] | None:
+        """按明细 id / 明细编号 / 业务键（需配合 run_no）查找明细。"""
+        if ref is None:
+            return None
+        ref_str = str(ref).strip()
+        for detail in reversed(self.reconcile_details):
+            if str(detail.get("detail_no", "")) == ref_str or str(detail.get("明细编号", "")) == ref_str:
+                return detail
+        if ref_str.isdigit():
+            for detail in reversed(self.reconcile_details):
+                if int(detail.get("id", -1)) == int(ref_str) or int(detail.get("detail_id", -1)) == int(ref_str):
+                    return detail
+        return None
+
+    def next_detail_seq(self) -> int:
+        return max((int(d.get("id", 0)) for d in self.reconcile_details), default=0) + 1
+
+    def next_note_id(self) -> int:
+        return max((int(n.get("id", 0)) for n in self.log_notes), default=0) + 1
+
+    def find_log_note(self, ref: Any) -> dict[str, Any] | None:
+        if ref is None:
+            return None
+        ref_str = str(ref).strip()
+        for note in reversed(self.log_notes):
+            if str(note.get("note_no", "")) == ref_str or str(note.get("说明编号", "")) == ref_str:
+                return note
+        if ref_str.isdigit():
+            for note in reversed(self.log_notes):
+                if int(note.get("id", -1)) == int(ref_str):
+                    return note
+        return None
+
+    def page_token_snapshot(self, token: str) -> dict[str, Any] | None:
+        return self.reconcile_page_tokens.get(token)
 
 
 store = Store()
